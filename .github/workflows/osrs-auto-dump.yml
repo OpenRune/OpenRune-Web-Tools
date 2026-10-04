@@ -1,0 +1,76 @@
+name: OSRS cache watch, dump, and upload
+
+# Runs on a *self-hosted* runner registered on your own VPS — not GitHub's cloud runners. The
+# dump pipeline (scripts/auto-dump-and-upload.mjs) needs a locally-running Next dev server whose
+# OPENRUNE_DEV_CACHE_DIR already points at your up-to-date RSPS cache folder; a throwaway
+# GitHub-hosted VM has no way to get that data. See the "one-time setup" notes below — after
+# that's done once, every push to the default branch keeps this workflow (and whatever script
+# changes came with it) live for the next scheduled run, fully hands-off.
+#
+# One-time setup on the VPS (not something this workflow does for you):
+#   1. GitHub repo -> Settings -> Actions -> Runners -> New self-hosted runner -> follow the
+#      Linux instructions to download/configure/install it as a service on the VPS.
+#   2. GitHub repo -> Settings -> Secrets and variables -> Actions -> add R2_ACCOUNT_ID,
+#      R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME as *secrets* (or run
+#      `gh secret set R2_ACCOUNT_ID` etc. from a terminal you trust — never paste real key
+#      values into a chat/PR/issue).
+#   3. Make sure `npm run dev` is already running persistently on the VPS (pm2/systemd/screen —
+#      your choice, this workflow does not start or manage it) with its own `.env.local`
+#      pointing OPENRUNE_DEV_CACHE_DIR at that machine's synced cache folder.
+#   4. `npx playwright install chromium` once on the runner (the job below also runs this every
+#      time, but it's a cheap no-op once already installed, so the very first run is covered).
+#
+# Schedule: every 30 min, 2pm-8pm UK time, Wednesdays (OSRS updates are reliably Wednesday; exact
+# time varies, hence polling). GitHub Actions cron is always UTC and does not follow DST, so this
+# is split into a BST block and a GMT block by month — the ~1 week around the actual UK
+# clock-change dates (late March / late October) may be off by an hour either side.
+on:
+  schedule:
+    - cron: "0,30 13-18 * 4-10 3" # BST (UTC+1), Apr-Oct: 2:00pm-6:30pm local
+    - cron: "0 19 * 4-10 3" # BST: the exact 8:00pm local tick
+    - cron: "0,30 14-19 * 11,12,1-3 3" # GMT (UTC+0), Nov-Mar: 2:00pm-7:30pm local
+    - cron: "0 20 * 11,12,1-3 3" # GMT: the exact 8:00pm local tick
+  workflow_dispatch:
+    inputs:
+      manual:
+        description: "Dump now regardless of whether the OSRS cache id changed"
+        type: boolean
+        default: true
+
+jobs:
+  dump-and-upload:
+    runs-on: self-hosted
+    # A full-map dump (all modes/planes) can run long — default Actions job timeout is 6h
+    # regardless of runner type. Raise this if your own first full run takes longer; lower it
+    # once you know your real runtime, so a genuinely stuck job doesn't tie up the runner
+    # indefinitely.
+    timeout-minutes: 1440
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+
+      - run: npx playwright install chromium
+
+      - name: Check for a new OSRS cache, dump, and upload to R2
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: |
+          # State lives outside the checkout (in the runner account's home dir), not inside the
+          # workspace — a fresh `actions/checkout` is allowed to reset untracked files in the
+          # repo dir, and both the "last known cache id" and dump-map-tiles.mjs's own
+          # CRC/manifest skip-unchanged system need to survive between runs to stay useful.
+          export DUMPS_OUT_DIR="$HOME/openrune-dumps"
+          export CACHE_STATE_PATH="$HOME/openrune-dumps/state/last-cache-id.json"
+          if [ "${{ github.event.inputs.manual }}" = "true" ]; then
+            node scripts/auto-dump-and-upload.mjs --manual
+          else
+            node scripts/auto-dump-and-upload.mjs
+          fi
