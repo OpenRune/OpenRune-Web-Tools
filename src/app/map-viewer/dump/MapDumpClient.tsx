@@ -268,7 +268,7 @@ function getWorkerPool(): RenderDataWorkerPool {
         registerSerializer(renderDataLoaderSerializer);
         registered = true;
     }
-    if (!workerPool) workerPool = RenderDataWorkerPool.create(4);
+    if (!workerPool) workerPool = RenderDataWorkerPool.create(8);
     return workerPool;
 }
 

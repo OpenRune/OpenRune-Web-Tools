@@ -48,21 +48,29 @@
  * Usage (bounding box, in world tile coordinates — takes priority over --x/--z/--radius):
  *   node scripts/dump-map-tiles.mjs --x1 3094 --z1 3213 --x2 3356 --z2 3486 --modes 3d,overlay
  *
- * --concurrency N (default 1 — see warning below): runs N browser pages in parallel, each
- * independently loading the cache (its own worker pool — see MapDumpClient.tsx) and pulling from
- * one shared work queue. The queue/manifest/progress-bar sharing itself is fine (plain in-process
- * JS state mutated between awaits, not real parallel access) — the problem is underneath that:
- * with N>1, multiple pages hold concurrent WebGL contexts against the same software renderer
- * (--use-gl=angle --use-angle=swiftshader), and that's been caught silently producing
- * 180°-rotated flat/3d captures — confirmed by re-dumping the exact same region at concurrency 1
- * vs 2 and comparing. No fix found yet (looks like a SwiftShader/multi-context issue, not
- * anything in this renderer's own camera math — a region captured correctly in isolation came out
- * rotated only when captured alongside another page's concurrent render). CPU-rasterized 2d/
- * overlay captures don't touch WebGL at all, so they're presumably unaffected, but that's not
- * independently confirmed either — until this is root-caused, leave concurrency at 1 for anything
- * you need to trust, especially flat/3d. Each page loading its own full copy of the cache is also
- * expensive on its own terms — 4 concurrent pages reliably crashed the whole Node process with an
- * out-of-memory error in earlier testing.
+ * --concurrency N (default 2): runs N browser pages in parallel, each independently loading the
+ * cache (its own worker pool — see MapDumpClient.tsx) and pulling from one shared work queue.
+ * Two real bugs used to make N>1 unsafe, both now fixed:
+ *   - What looked like N>1 silently producing 180°-rotated flat/3d captures turned out, once
+ *     properly re-investigated, to be a systemic north/south+east/west sign error in this script's
+ *     own camera/compositing math that was wrong regardless of concurrency, just inconsistently
+ *     spot-checked at the time (see MapDumpClient.tsx's getTouchedSquareRange doc comment and the
+ *     `capture()` 180°-rotation comment).
+ *   - 3d-mode captures under concurrency came out measurably darker than the same region captured
+ *     alone. Root cause: Chromium throttles requestAnimationFrame for pages it considers
+ *     backgrounded/occluded, and with N>1 pages only one can be "focused" at a time — the others'
+ *     newly-loaded geometry barely got a real frame to finish drawing/shading before capture.
+ *     Fixed via the --disable-backgrounding-occluded-windows/--disable-renderer-backgrounding/
+ *     --disable-background-timer-throttling launch args below, not by waiting longer (confirmed:
+ *     a longer post-settle wait alone made it worse, not better — a throttled page doesn't catch
+ *     up just because more wall-clock time passes).
+ * Re-verified after both fixes: concurrency 1 vs 2 now produce the same orientation AND the same
+ * brightness for the same region (flat mode: byte-for-byte identical; 3d mode: file size within
+ * noise of the concurrency-1 baseline). Each page loading its own full copy of the cache is still
+ * expensive on its own terms though — concurrency 3 reliably failed with "Worker not initialized"
+ * errors (this script's own worker pool, not the browser) and concurrency 4 reliably OOM-crashed
+ * the whole Node process in earlier testing — 2 is the confirmed-safe ceiling, not an arbitrary
+ * default.
  *
  * Output layout: <out>/<mode's dir, see MODES below>/<plane>/<zoom>/<tile id>.webp — at zoom 3
  * ("base", one image per region) <tile id> is the real OSRS region id (`(regionX << 8) |
@@ -268,7 +276,10 @@ async function processItem(page, item, shared) {
         }
         // One more beat after settling for the newly-uploaded geometry to actually get drawn —
         // "nothing left to load" and "the last loaded square has been rendered" aren't quite the
-        // same frame.
+        // same frame. (The darker-under-concurrency captures turned out to be caused by Chromium
+        // throttling background pages' requestAnimationFrame — see the anti-throttling launch
+        // args above — not by this wait being too short, so this stays at the original value
+        // rather than paying extra time on every item for a theory that didn't pan out.)
         await page.waitForTimeout(500);
         dataUrl = await page.evaluate(() => window.__mapDump.capture());
     }
@@ -317,9 +328,9 @@ async function main() {
     const progressPath = args.progress ?? join(outDir, "progress.json");
     const force = args.force === "true";
     const verbose = args.verbose === "true";
-    // Default 1 — see the --concurrency doc comment above: >1 is confirmed to occasionally
-    // produce silently-corrupted (180°-rotated) captures for flat/3d, not just slower/flakier.
-    const concurrency = Number.parseInt(args.concurrency ?? "1", 10);
+    // Default 2 — see the --concurrency doc comment above for why this is safe now (it wasn't a
+    // real concurrency bug) and why not to push it much higher (memory, not correctness).
+    const concurrency = Number.parseInt(args.concurrency ?? "2", 10);
     // A single stuck page.evaluate() (SwiftShader wedged, a pathologically loc-heavy square, a
     // dev-server hiccup) used to block the whole queue forever. Past this many ms, give up on
     // that item (same as any other error — logged, unrecorded, retried next run) and force that
@@ -396,6 +407,17 @@ async function main() {
             "--disable-gpu-sandbox",
             "--enable-webgl",
             "--enable-webgl2",
+            // Chromium throttles requestAnimationFrame (down to ~1fps or less) for pages it
+            // considers backgrounded/occluded — with --concurrency >1, only one of our pages can
+            // be "focused" at a time, so every other page's render loop barely ticks. That starved
+            // the newest-loaded geometry of the real frames it needs to finish drawing/shading
+            // before capture, surfacing as 3d captures that were measurably darker than the exact
+            // same region captured alone (confirmed: more wait time alone didn't fix it, since a
+            // throttled page doesn't catch up just because more wall-clock time passed — it needed
+            // to not be throttled in the first place).
+            "--disable-backgrounding-occluded-windows",
+            "--disable-renderer-backgrounding",
+            "--disable-background-timer-throttling",
         ],
     });
 
