@@ -8,6 +8,31 @@ export function getMousePos(container: HTMLElement, event: MouseEvent | Touch): 
     return [x, y];
 }
 
+function keyboardEventTargetIsEditable(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) {
+        return false;
+    }
+    const tag = target.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
+        return true;
+    }
+    return target.isContentEditable;
+}
+
+/** Maps `PointerEvent.button` / `MouseEvent.button` to stable chord codes (same strings stored in `keys`). */
+export function mouseButtonToChordCode(button: number): string | null {
+    if (button === 0) {
+        return "MouseLeft";
+    }
+    if (button === 1) {
+        return "MouseMiddle";
+    }
+    if (button === 2) {
+        return "MouseRight";
+    }
+    return null;
+}
+
 export function getAxisDeadzone(axis: number, zone: number): number {
     if (Math.abs(axis) < zone) {
         return 0;
@@ -23,6 +48,9 @@ export class InputManager {
 
     keys: Map<string, boolean> = new Map();
 
+    /** Non-repeating keydown codes this frame; cleared in `onFrameEnd`. */
+    keysPressedThisFrame: Set<string> = new Set();
+
     mouseX: number = -1;
     mouseY: number = -1;
 
@@ -31,9 +59,17 @@ export class InputManager {
 
     dragX: number = -1;
     dragY: number = -1;
+    dragButton: number = -1;
 
     deltaMouseX: number = 0;
     deltaMouseY: number = 0;
+    mouseWheelDeltaY: number = 0;
+
+    holdX: number = -1;
+    holdY: number = -1;
+
+    /** Per-frame wheel delta (map editor brush size). */
+    scrollY: number = 0;
 
     isTouch: boolean = false;
 
@@ -44,6 +80,41 @@ export class InputManager {
     cameraJoystickEvent?: IJoystickUpdateEvent;
 
     gamepadIndex?: number;
+
+    /**
+     * Double-click engages pointer lock (mouse-look, cursor hidden) — fine for a scenic viewer,
+     * but fights precise click-to-select/delete workflows in the editor, where a stray
+     * double-click during normal clicking shouldn't suddenly eat the cursor.
+     */
+    pointerLockOnDoubleClick: boolean = true;
+
+    /**
+     * When true, ignore hardware events (used while editor settings / blocking UI is open).
+     * Clears accumulated key/button state when enabled.
+     */
+    private inputBlockedForUi = false;
+
+    setInputBlockedForUi(blocked: boolean): void {
+        this.inputBlockedForUi = blocked;
+        if (blocked) {
+            this.keys.clear();
+            this.keysPressedThisFrame.clear();
+            this.resetMouse();
+            this.deltaMouseX = 0;
+            this.deltaMouseY = 0;
+            this.mouseWheelDeltaY = 0;
+            this.scrollY = 0;
+            this.pickX = -1;
+            this.pickY = -1;
+            this.positionJoystickEvent = undefined;
+            this.cameraJoystickEvent = undefined;
+            this.isTouch = false;
+        }
+    }
+
+    isInputBlockedForUi(): boolean {
+        return this.inputBlockedForUi;
+    }
 
     init(element: HTMLElement) {
         if (!this.element) {
@@ -56,13 +127,16 @@ export class InputManager {
 
         element.addEventListener("dblclick", this.onDoubleClick);
 
-        element.addEventListener("keydown", this.onKeyDown);
-        element.addEventListener("keyup", this.onKeyUp);
+        // Window-level keys so Ctrl/Alt/Shift still work while React UI (overlay panel, etc.) has focus.
+        window.addEventListener("keydown", this.onKeyDown, true);
+        window.addEventListener("keyup", this.onKeyUp, true);
+        window.addEventListener("blur", this.onWindowBlur);
 
         element.addEventListener("mousedown", this.onMouseDown);
         element.addEventListener("mousemove", this.onMouseMove);
         element.addEventListener("mouseup", this.onMouseUp);
         element.addEventListener("mouseleave", this.onMouseLeave);
+        element.addEventListener("wheel", this.onWheel, { passive: false });
 
         element.addEventListener("touchstart", this.onTouchStart);
         element.addEventListener("touchmove", this.onTouchMove);
@@ -83,13 +157,15 @@ export class InputManager {
 
         this.element.removeEventListener("dblclick", this.onDoubleClick);
 
-        this.element.removeEventListener("keydown", this.onKeyDown);
-        this.element.removeEventListener("keyup", this.onKeyUp);
+        window.removeEventListener("keydown", this.onKeyDown, true);
+        window.removeEventListener("keyup", this.onKeyUp, true);
+        window.removeEventListener("blur", this.onWindowBlur);
 
         this.element.removeEventListener("mousedown", this.onMouseDown);
         this.element.removeEventListener("mousemove", this.onMouseMove);
         this.element.removeEventListener("mouseup", this.onMouseUp);
         this.element.removeEventListener("mouseleave", this.onMouseLeave);
+        this.element.removeEventListener("wheel", this.onWheel);
 
         this.element.removeEventListener("touchstart", this.onTouchStart);
         this.element.removeEventListener("touchmove", this.onTouchMove);
@@ -104,6 +180,14 @@ export class InputManager {
         return this.isKeyDown("ShiftLeft") || this.isKeyDown("ShiftRight");
     }
 
+    isControlDown(): boolean {
+        return this.isKeyDown("ControlLeft") || this.isKeyDown("ControlRight");
+    }
+
+    isAltDown(): boolean {
+        return this.isKeyDown("AltLeft") || this.isKeyDown("AltRight");
+    }
+
     isKeyDown(key: string): boolean {
         return this.keys.has(key);
     }
@@ -114,6 +198,14 @@ export class InputManager {
 
     isDragging(): boolean {
         return this.dragX !== -1 && this.dragY !== -1;
+    }
+
+    isHolding(): boolean {
+        return this.holdX !== -1 && this.holdY !== -1;
+    }
+
+    isMiddleDragging(): boolean {
+        return this.isDragging() && this.dragButton === 1;
     }
 
     isPointerLock(): boolean {
@@ -168,33 +260,71 @@ export class InputManager {
     };
 
     private onDoubleClick = (event: MouseEvent) => {
+        if (this.inputBlockedForUi || !this.pointerLockOnDoubleClick) {
+            return;
+        }
         if (!document.pointerLockElement && this.element) {
             this.element.requestPointerLock();
         }
     };
 
     private onKeyDown = (event: KeyboardEvent) => {
-        event.preventDefault();
+        if (this.inputBlockedForUi) {
+            return;
+        }
         this.keys.set(event.code, true);
+        if (!event.repeat) {
+            this.keysPressedThisFrame.add(event.code);
+        }
+        if (!keyboardEventTargetIsEditable(event.target)) {
+            event.preventDefault();
+        }
     };
 
     private onKeyUp = (event: KeyboardEvent) => {
-        event.preventDefault();
+        if (this.inputBlockedForUi) {
+            return;
+        }
         this.keys.delete(event.code);
+        if (!keyboardEventTargetIsEditable(event.target)) {
+            event.preventDefault();
+        }
+    };
+
+    private onWindowBlur = () => {
+        this.keys.clear();
+        this.keysPressedThisFrame.clear();
     };
 
     private onMouseDown = (event: MouseEvent) => {
-        if (event.button !== 0 || !this.element) {
+        if (this.inputBlockedForUi) {
+            return;
+        }
+        if (!this.element) {
             return;
         }
         const [x, y] = getMousePos(this.element, event);
-        this.dragX = x;
-        this.dragY = y;
+        if (event.button === 0 || event.button === 1) {
+            this.dragX = x;
+            this.dragY = y;
+            this.dragButton = event.button;
+        } else if (event.button === 2) {
+            this.holdX = x;
+            this.holdY = y;
+        }
         this.mouseX = x;
         this.mouseY = y;
+        const buttonCode = mouseButtonToChordCode(event.button);
+        if (buttonCode) {
+            this.keys.set(buttonCode, true);
+            this.keysPressedThisFrame.add(buttonCode);
+        }
     };
 
     private onMouseMove = (event: MouseEvent) => {
+        if (this.inputBlockedForUi) {
+            return;
+        }
         if (!this.element) {
             return;
         }
@@ -210,15 +340,46 @@ export class InputManager {
     };
 
     private onMouseUp = (event: MouseEvent) => {
-        this.dragX = -1;
-        this.dragY = -1;
+        if (this.inputBlockedForUi) {
+            return;
+        }
+        if (event.button === 0 || event.button === 1) {
+            if (this.dragButton !== -1 && event.button !== this.dragButton) {
+                return;
+            }
+            this.dragX = -1;
+            this.dragY = -1;
+            this.dragButton = -1;
+        } else if (event.button === 2) {
+            this.holdX = -1;
+            this.holdY = -1;
+        }
+        const buttonCode = mouseButtonToChordCode(event.button);
+        if (buttonCode) {
+            this.keys.delete(buttonCode);
+        }
     };
 
     private onMouseLeave = (event: MouseEvent) => {
+        if (this.inputBlockedForUi) {
+            return;
+        }
         this.resetMouse();
     };
 
+    private onWheel = (event: WheelEvent) => {
+        if (this.inputBlockedForUi) {
+            return;
+        }
+        event.preventDefault();
+        this.mouseWheelDeltaY += event.deltaY;
+        this.scrollY += event.deltaY;
+    };
+
     private onTouchStart = (event: TouchEvent) => {
+        if (this.inputBlockedForUi) {
+            return;
+        }
         if (!this.element) {
             return;
         }
@@ -231,6 +392,9 @@ export class InputManager {
     };
 
     private onTouchMove = (event: TouchEvent) => {
+        if (this.inputBlockedForUi) {
+            return;
+        }
         if (!this.element) {
             return;
         }
@@ -240,11 +404,17 @@ export class InputManager {
     };
 
     private onTouchEnd = (event: TouchEvent) => {
+        if (this.inputBlockedForUi) {
+            return;
+        }
         this.dragX = -1;
         this.dragY = -1;
     };
 
     private onContextMenu = (event: MouseEvent) => {
+        if (this.inputBlockedForUi) {
+            return;
+        }
         if (!this.element) {
             return;
         }
@@ -271,8 +441,6 @@ export class InputManager {
     };
 
     private onFocusOut = () => {
-        console.log("Focus lost");
-        this.keys.clear();
         this.resetMouse();
     };
 
@@ -281,9 +449,13 @@ export class InputManager {
         this.mouseY = -1;
         this.dragX = -1;
         this.dragY = -1;
+        this.dragButton = -1;
+        this.holdX = -1;
+        this.holdY = -1;
     }
 
     onFrameEnd() {
+        this.keysPressedThisFrame.clear();
         for (const key of this.keys.keys()) {
             this.keys.set(key, false);
         }
@@ -293,6 +465,8 @@ export class InputManager {
         }
         this.deltaMouseX = 0;
         this.deltaMouseY = 0;
+        this.mouseWheelDeltaY = 0;
+        this.scrollY = 0;
         this.pickX = -1;
         this.pickY = -1;
         this.lastMouseX = this.mouseX;

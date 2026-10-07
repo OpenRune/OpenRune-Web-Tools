@@ -7,7 +7,7 @@ export class FloorDecoration implements SceneLoc {
         public entity: Entity,
         readonly x: number,
         readonly y: number,
-        readonly height: number,
+        public height: number,
         readonly tag: EntityTag,
         readonly flags: number,
     ) {}

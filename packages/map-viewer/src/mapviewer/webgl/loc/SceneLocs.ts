@@ -1,3 +1,7 @@
+import {
+    locFootprintIntersectsChunk,
+    sceneTileIntersectsChunk,
+} from "../../../mapeditor/webgl/objectChunk";
 import { LocModelType } from "../../../rs/config/loctype/LocModelType";
 import { LocType } from "../../../rs/config/loctype/LocType";
 import { LocTypeLoader } from "../../../rs/config/loctype/LocTypeLoader";
@@ -53,6 +57,40 @@ export function isLowDetail(
     }
 
     return false;
+}
+
+type SceneLocWithFootprint = SceneLoc & {
+    startX?: number;
+    startY?: number;
+    endX?: number;
+    endY?: number;
+};
+
+/** Ground height from current tile data so loc meshes track terrain edits. */
+export function getGroundHeightForSceneLoc(
+    scene: Scene,
+    level: number,
+    tileX: number,
+    tileY: number,
+    sceneLoc: SceneLoc,
+): number {
+    const loc = sceneLoc as SceneLocWithFootprint;
+    if (
+        typeof loc.startX === "number" &&
+        typeof loc.endX === "number" &&
+        typeof loc.startY === "number" &&
+        typeof loc.endY === "number"
+    ) {
+        const heightMap = scene.tileHeights[level];
+        return (
+            (heightMap[loc.endX][loc.endY] +
+                heightMap[loc.startX][loc.endY] +
+                heightMap[loc.startX][loc.startY] +
+                heightMap[loc.endX][loc.startY]) >>
+            2
+        );
+    }
+    return scene.getCenterHeight(level, tileX, tileY);
 }
 
 export function createSceneModel(
@@ -136,6 +174,16 @@ export function getSceneLocs(
     borderSize: number,
     maxLevel: number,
 ): SceneLocs {
+    return getSceneLocsForChunk(locTypeLoader, scene, borderSize, maxLevel, -1);
+}
+
+export function getSceneLocsForChunk(
+    locTypeLoader: LocTypeLoader,
+    scene: Scene,
+    borderSize: number,
+    maxLevel: number,
+    chunkId: number,
+): SceneLocs {
     const locs: SceneModel[] = [];
     const locEntities: SceneLocEntity[] = [];
 
@@ -145,6 +193,9 @@ export function getSceneLocs(
     const endY = borderSize + Scene.MAP_SQUARE_SIZE;
 
     const sceneOffset = borderSize * -128;
+
+    const tileInChunk = (tx: number, ty: number): boolean =>
+        chunkId < 0 || sceneTileIntersectsChunk(tx, ty, borderSize, chunkId);
 
     for (let level = 0; level < scene.levels; level++) {
         for (let tileX = startX; tileX < endX; tileX++) {
@@ -161,7 +212,7 @@ export function getSceneLocs(
                     continue;
                 }
 
-                if (tile.floorDecoration) {
+                if (tile.floorDecoration && tileInChunk(tileX, tileY)) {
                     if (tile.floorDecoration.entity instanceof Model) {
                         locs.push(
                             createSceneModel(
@@ -192,7 +243,7 @@ export function getSceneLocs(
                     }
                 }
 
-                if (tile.wall) {
+                if (tile.wall && tileInChunk(tileX, tileY)) {
                     if (tile.wall.entity0 instanceof Model) {
                         locs.push(
                             createSceneModel(
@@ -252,7 +303,7 @@ export function getSceneLocs(
                     }
                 }
 
-                if (tile.wallDecoration) {
+                if (tile.wallDecoration && tileInChunk(tileX, tileY)) {
                     const offsetX = tile.wallDecoration.offsetX;
                     const offsetY = tile.wallDecoration.offsetY;
                     if (tile.wallDecoration.entity0 instanceof Model) {
@@ -316,6 +367,20 @@ export function getSceneLocs(
 
                 for (const loc of tile.locs) {
                     if (loc.startX !== tileX || loc.startY !== tileY) {
+                        continue;
+                    }
+
+                    if (
+                        chunkId >= 0 &&
+                        !locFootprintIntersectsChunk(
+                            loc.startX,
+                            loc.startY,
+                            loc.endX,
+                            loc.endY,
+                            borderSize,
+                            chunkId,
+                        )
+                    ) {
                         continue;
                     }
 

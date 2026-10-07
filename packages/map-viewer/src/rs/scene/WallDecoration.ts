@@ -8,7 +8,7 @@ export class WallDecoration implements SceneLoc {
         readonly flags: number,
         readonly x: number,
         readonly y: number,
-        readonly height: number,
+        public height: number,
         readonly entity0: Entity,
         readonly entity1: Entity | undefined,
         public offsetX: number,

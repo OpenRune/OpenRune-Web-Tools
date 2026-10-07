@@ -44,6 +44,7 @@ export class MapManager<T extends MapSquare> {
     visibleMaps: T[] = [];
 
     mapSquares: Map<number, T> = new Map();
+    private allowedBounds?: { minX: number; minY: number; maxX: number; maxY: number };
 
     constructor(
         readonly maxQueuedTasks: number,
@@ -107,6 +108,10 @@ export class MapManager<T extends MapSquare> {
         return this.mapSquares.get(getMapSquareId(mapX, mapY));
     }
 
+    getMapById(mapId: number): T | undefined {
+        return this.mapSquares.get(mapId);
+    }
+
     addMap(mapX: number, mapY: number, mapSquare: T): void {
         const mapId = getMapSquareId(mapX, mapY);
         this.loadingMapIds.delete(mapId);
@@ -129,9 +134,37 @@ export class MapManager<T extends MapSquare> {
         this.loadingMapIds.delete(mapId);
     }
 
+    setAllowedBounds(minX: number, minY: number, maxX: number, maxY: number): void {
+        this.allowedBounds = { minX, minY, maxX, maxY };
+        for (const map of this.mapSquares.values()) {
+            if (map.mapX < minX || map.mapX > maxX || map.mapY < minY || map.mapY > maxY) {
+                this.removeMap(map.mapX, map.mapY);
+            }
+        }
+        this.renderBounds.fill(-1);
+    }
+
+    clearAllowedBounds(): void {
+        this.allowedBounds = undefined;
+        this.renderBounds.fill(-1);
+    }
+
+    private isWithinAllowedBounds(mapX: number, mapY: number): boolean {
+        if (!this.allowedBounds) {
+            return true;
+        }
+        return (
+            mapX >= this.allowedBounds.minX &&
+            mapX <= this.allowedBounds.maxX &&
+            mapY >= this.allowedBounds.minY &&
+            mapY <= this.allowedBounds.maxY
+        );
+    }
+
     loadMap(mapX: number, mapY: number): void {
         const mapId = getMapSquareId(mapX, mapY);
         if (
+            !this.isWithinAllowedBounds(mapX, mapY) ||
             this.mapSquares.has(mapId) ||
             this.invalidMapIds.has(mapId) ||
             this.loadingMapIds.has(mapId) ||
@@ -172,6 +205,9 @@ export class MapManager<T extends MapSquare> {
             for (let x = mapStartX; x < mapEndX; x++) {
                 for (let y = mapStartY; y < mapEndY; y++) {
                     if (x < 0 || y < 0 || x >= MapManager.MAX_MAP_X || y >= MapManager.MAX_MAP_Y) {
+                        continue;
+                    }
+                    if (!this.isWithinAllowedBounds(x, y)) {
                         continue;
                     }
                     const mapId = getMapSquareId(x, y);

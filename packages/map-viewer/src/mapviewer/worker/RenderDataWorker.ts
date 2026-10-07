@@ -3,6 +3,21 @@ import { TransferDescriptor } from "threads";
 import { registerSerializer } from "threads";
 import { Transfer, expose } from "threads/worker";
 
+import {
+    type LiveMinimapWorkerRequest,
+    type LiveMinimapWorkerResult,
+    sceneFromTerrainData,
+} from "../../mapeditor/liveMinimapWorkerPayload";
+import { EditorMapData } from "../../mapeditor/webgl/loader/EditorMapData";
+import type { SceneData } from "../../mapeditor/webgl/loader/EditorMapData";
+import {
+    loadEditorMapData,
+    loadEditorMapObjectData,
+    loadEditorMapTerrainData,
+} from "../../mapeditor/webgl/loader/EditorMapDataLoader";
+import { EditorMapObjectChunkData } from "../../mapeditor/webgl/loader/EditorMapObjectChunkData";
+import { EditorMapTerrainData } from "../../mapeditor/webgl/loader/EditorMapTerrainData";
+import type { SceneLocData } from "../../mapeditor/webgl/sceneLocData";
 import { CacheSystem } from "../../rs/cache/CacheSystem";
 import { ConfigType } from "../../rs/cache/ConfigType";
 import { IndexType } from "../../rs/cache/IndexType";
@@ -34,7 +49,12 @@ import { Hasher } from "../../util/Hasher";
 import { LoadedCache } from "../Caches";
 import { NpcSpawn } from "../data/npc/NpcSpawn";
 import { ObjSpawn } from "../data/obj/ObjSpawn";
-import { MinimapData, loadMapOverlayBlob, loadMinimapBlob } from "./MinimapData";
+import {
+    MinimapData,
+    loadMapOverlayBlob,
+    loadMinimapBlob,
+    minimapHdPixelsToBlob,
+} from "./MinimapData";
 import { RenderDataLoader, renderDataLoaderSerializer } from "./RenderDataLoader";
 
 registerSerializer(renderDataLoaderSerializer);
@@ -281,6 +301,79 @@ const worker = {
             cacheInfo: workerState.cache.info,
             minimapBlob,
         };
+    },
+    async loadEditorMapData(
+        mapX: number,
+        mapY: number,
+        smoothUnderlays: boolean,
+    ): Promise<TransferDescriptor<EditorMapData | undefined>> {
+        const workerState = await workerStatePromise;
+        if (!workerState) {
+            throw new Error("Worker not initialized");
+        }
+
+        return loadEditorMapData(workerState, mapX, mapY, smoothUnderlays);
+    },
+    async loadEditorMapTerrainData(
+        mapX: number,
+        mapY: number,
+        heightMapTextureData: Float32Array,
+        smoothUnderlays: boolean,
+    ): Promise<EditorMapTerrainData | undefined> {
+        const workerState = await workerStatePromise;
+        if (!workerState) {
+            throw new Error("Worker not initialized");
+        }
+
+        return loadEditorMapTerrainData(
+            workerState,
+            mapX,
+            mapY,
+            heightMapTextureData,
+            smoothUnderlays,
+        );
+    },
+    async loadEditorMapObjectData(
+        mapX: number,
+        mapY: number,
+        borderSize: number,
+        scene: SceneData,
+        sceneLocData: SceneLocData,
+        chunkIds: number[],
+        smoothUnderlays: boolean,
+    ): Promise<TransferDescriptor<EditorMapObjectChunkData[]>> {
+        const workerState = await workerStatePromise;
+        if (!workerState) {
+            throw new Error("Worker not initialized");
+        }
+
+        return loadEditorMapObjectData(
+            workerState,
+            { mapX, mapY, borderSize, scene, sceneLocData, chunkIds },
+            smoothUnderlays,
+        );
+    },
+    async renderLiveEditorMinimap(
+        payload: LiveMinimapWorkerRequest,
+    ): Promise<TransferDescriptor<LiveMinimapWorkerResult>> {
+        const workerState = await workerStatePromise;
+        if (!workerState) {
+            throw new Error("Worker not initialized");
+        }
+
+        const scene = sceneFromTerrainData(payload.scene);
+
+        // Editor minimap should stay in SD mode (flat minimap renderer) to match the requested look.
+        workerState.sceneBuilder.addTileModels(scene, false);
+        const pixelCache = workerState.mapImageRenderer.renderMinimap(scene, payload.selectedLevel);
+        const minimapBlob = await minimapHdPixelsToBlob(
+            pixelCache,
+            scene.sizeX,
+            scene.sizeY,
+            payload.borderSize,
+        );
+
+        return Transfer<LiveMinimapWorkerResult>({ minimapBlob, pixelCache }, [pixelCache.buffer]);
     },
     async loadMapOverlayImage(
         mapX: number,

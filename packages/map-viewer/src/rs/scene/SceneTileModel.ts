@@ -469,3 +469,81 @@ export class SceneTileModel {
         }
     }
 }
+
+/** Tile-underlay UV span (matches {@link TILE_SIZE}). */
+const OVERLAY_PREVIEW_TILE_UV = 128;
+
+function collectTexturedOverlayUvTriangles(
+    model: SceneTileModel,
+    sceneTileX: number,
+    sceneTileY: number,
+): [number, number, number, number, number, number][] {
+    const ox = sceneTileX * OVERLAY_PREVIEW_TILE_UV;
+    const oz = sceneTileY * OVERLAY_PREVIEW_TILE_UV;
+    const out: [number, number, number, number, number, number][] = [];
+    const scale = OVERLAY_PREVIEW_TILE_UV;
+    for (const face of model.faces) {
+        if (face.vertices[0].textureId === -1) {
+            continue;
+        }
+        const v0 = face.vertices[0];
+        const v1 = face.vertices[1];
+        const v2 = face.vertices[2];
+        out.push([
+            (v0.x - ox) / scale,
+            (v0.z - oz) / scale,
+            (v1.x - ox) / scale,
+            (v1.z - oz) / scale,
+            (v2.x - ox) / scale,
+            (v2.z - oz) / scale,
+        ]);
+    }
+    return out;
+}
+
+/** Overlay faces from {@link tileShapeFaces} (tile model "overlay" layer, including HSL-only overlay). */
+function collectShapeTableOverlayUvTriangles(
+    model: SceneTileModel,
+    sceneTileX: number,
+    sceneTileY: number,
+): [number, number, number, number, number, number][] {
+    const ox = sceneTileX * OVERLAY_PREVIEW_TILE_UV;
+    const oz = sceneTileY * OVERLAY_PREVIEW_TILE_UV;
+    const tf = tileShapeFaces[model.shape];
+    const out: [number, number, number, number, number, number][] = [];
+    const scale = OVERLAY_PREVIEW_TILE_UV;
+    for (let i = 0; i < model.normalFaceCount; i++) {
+        if (tf[i * 4] !== 1) {
+            continue;
+        }
+        const a = model.facesA[i]!;
+        const b = model.facesB[i]!;
+        const c = model.facesC[i]!;
+        out.push([
+            (model.vertexX[a]! - ox) / scale,
+            (model.vertexZ[a]! - oz) / scale,
+            (model.vertexX[b]! - ox) / scale,
+            (model.vertexZ[b]! - oz) / scale,
+            (model.vertexX[c]! - ox) / scale,
+            (model.vertexZ[c]! - oz) / scale,
+        ]);
+    }
+    return out;
+}
+
+/**
+ * Footprint for overlay flood preview: prefers triangles that match terrain draw (textured faces), then
+ * falls back to shape-table overlay faces so path-shaped tiles still outline when overlay is HSL-only
+ * or otherwise has no textured {@link SceneTileModel.faces} entries.
+ */
+export function getOverlayHighlightUvTriangles(
+    model: SceneTileModel,
+    sceneTileX: number,
+    sceneTileY: number,
+): ReadonlyArray<readonly [number, number, number, number, number, number]> {
+    const textured = collectTexturedOverlayUvTriangles(model, sceneTileX, sceneTileY);
+    if (textured.length > 0) {
+        return textured;
+    }
+    return collectShapeTableOverlayUvTriangles(model, sceneTileX, sceneTileY);
+}

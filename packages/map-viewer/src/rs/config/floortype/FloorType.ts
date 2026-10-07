@@ -7,6 +7,8 @@ export interface FloorType extends Type {
 
     isOverlay: boolean;
 
+    getRgb(): number;
+
     getHueBlend(): number;
 
     getHueMultiplier(): number;

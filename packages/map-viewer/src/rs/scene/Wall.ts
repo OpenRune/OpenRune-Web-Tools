@@ -8,7 +8,7 @@ export class Wall implements SceneLoc {
         readonly flags: number,
         readonly x: number,
         readonly y: number,
-        readonly height: number,
+        public height: number,
         public entity0: Entity | undefined,
         public entity1: Entity | undefined,
     ) {}

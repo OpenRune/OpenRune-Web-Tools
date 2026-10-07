@@ -1,9 +1,11 @@
+import { MapEditorPopoutPage } from "@openrune/map-viewer";
 import {
     Binary,
     Box,
     Check,
     Clapperboard,
     Coffee,
+    Hammer,
     Home,
     Images,
     Layers,
@@ -18,6 +20,7 @@ import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom"
 
 import AnimationEditorApp from "./app/animation-editor/AnimationEditorApp";
 import BinaryViewerApp from "./app/binary-viewer/BinaryViewerApp";
+import MapEditorApp from "./app/map-editor/MapEditorApp";
 import MapViewer2DApp from "./app/map-viewer-2d/MapViewer2DApp";
 import MapViewerApp from "./app/map-viewer/MapViewerApp";
 import ModelViewerApp from "./app/model-viewer/ModelViewerApp";
@@ -219,6 +222,10 @@ function SidebarNav({
                         <Box className="size-4 shrink-0" aria-hidden />
                         {!collapsed ? <span className="ml-1 truncate">Model Viewer</span> : null}
                     </NavLink>
+                    <NavLink to="/map-editor" className={navLinkClass("/map-editor")}>
+                        <Hammer className="size-4 shrink-0" aria-hidden />
+                        {!collapsed ? <span className="ml-1 truncate">Map Editor</span> : null}
+                    </NavLink>
                     <NavLink to="/map-viewer" className={navLinkClass("/map-viewer")}>
                         <Map className="size-4 shrink-0" aria-hidden />
                         {!collapsed ? <span className="ml-1 truncate">Map Viewer</span> : null}
@@ -324,12 +331,20 @@ function SidebarNav({
 
 export default function App(): JSX.Element {
     const location = useLocation();
+    const isMapEditorPopoutRoute = location.pathname.startsWith("/map-editor/popout");
     const isModelViewerRoute =
         location.pathname.startsWith("/model-viewer") ||
         location.pathname.startsWith("/animation-editor") ||
-        location.pathname.startsWith("/map-viewer");
+        location.pathname.startsWith("/map-viewer") ||
+        location.pathname.startsWith("/map-editor");
     // ("/map-viewer-2d" is matched too — it shares the "/map-viewer" prefix.)
     const { sidebarCollapsed, toggleSidebarCollapsed } = useShellPreferences();
+
+    // The popout window is a standalone panel (opened via `window.open`/a Tauri webview) — no
+    // sidebar/shell around it.
+    if (isMapEditorPopoutRoute) {
+        return <MapEditorPopoutPage />;
+    }
 
     return (
         <div className="flex h-dvh w-full">
@@ -393,6 +408,7 @@ export default function App(): JSX.Element {
                         <Routes>
                             <Route path="/" element={<HomePage />} />
                             <Route path="/model-viewer" element={<ModelViewerApp />} />
+                            <Route path="/map-editor" element={<MapEditorApp />} />
                             <Route path="/map-viewer" element={<MapViewerApp />} />
                             <Route path="/map-viewer-2d" element={<MapViewer2DApp />} />
                             <Route path="/sprite-viewer" element={<SpriteViewerApp />} />

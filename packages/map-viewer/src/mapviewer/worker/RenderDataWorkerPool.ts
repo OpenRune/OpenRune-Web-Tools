@@ -3,6 +3,13 @@ import { QueuedTask } from "threads/dist/master/pool";
 import { WorkerDescriptor } from "threads/dist/master/pool-types";
 import { ObservablePromise } from "threads/dist/observable-promise";
 
+import type { LiveMinimapWorkerResult } from "../../mapeditor/liveMinimapWorkerPayload";
+import { transferLiveMinimapWorkerRequest } from "../../mapeditor/liveMinimapWorkerPayload";
+import { EditorMapData } from "../../mapeditor/webgl/loader/EditorMapData";
+import type { SceneData } from "../../mapeditor/webgl/loader/EditorMapData";
+import { EditorMapObjectChunkData } from "../../mapeditor/webgl/loader/EditorMapObjectChunkData";
+import { EditorMapTerrainData } from "../../mapeditor/webgl/loader/EditorMapTerrainData";
+import type { SceneLocData } from "../../mapeditor/webgl/sceneLocData";
 import { LoadedCache } from "../Caches";
 import { NpcSpawn } from "../data/npc/NpcSpawn";
 import { ObjSpawn } from "../data/obj/ObjSpawn";
@@ -53,6 +60,65 @@ export class RenderDataWorkerPool {
         input: I,
     ): QueuedTask<RenderDataWorkerThread, D> {
         return this.pool.queue((w) => w.load(loader, input) as ObservablePromise<D>);
+    }
+
+    queueLoadEditorMapData(
+        mapX: number,
+        mapY: number,
+        smoothUnderlays: boolean,
+    ): QueuedTask<RenderDataWorkerThread, EditorMapData | undefined> {
+        return this.pool.queue(
+            (w) =>
+                w.loadEditorMapData(mapX, mapY, smoothUnderlays) as ObservablePromise<
+                    EditorMapData | undefined
+                >,
+        );
+    }
+
+    queueLoadEditorMapTerrainData(
+        mapX: number,
+        mapY: number,
+        heightMapTextureData: Float32Array,
+        smoothUnderlays: boolean,
+    ): QueuedTask<RenderDataWorkerThread, EditorMapTerrainData | undefined> {
+        return this.pool.queue(
+            (w) =>
+                w.loadEditorMapTerrainData(
+                    mapX,
+                    mapY,
+                    heightMapTextureData,
+                    smoothUnderlays,
+                ) as ObservablePromise<EditorMapTerrainData | undefined>,
+        );
+    }
+
+    queueLoadEditorMapObjectData(
+        mapX: number,
+        mapY: number,
+        borderSize: number,
+        scene: SceneData,
+        sceneLocData: SceneLocData,
+        chunkIds: number[],
+        smoothUnderlays: boolean,
+    ): QueuedTask<RenderDataWorkerThread, EditorMapObjectChunkData[] | undefined> {
+        return this.pool.queue(
+            (w) =>
+                w.loadEditorMapObjectData(
+                    mapX,
+                    mapY,
+                    borderSize,
+                    scene,
+                    sceneLocData,
+                    chunkIds,
+                    smoothUnderlays,
+                ) as ObservablePromise<EditorMapObjectChunkData[] | undefined>,
+        );
+    }
+
+    queueEditorLiveMinimap(
+        payload: ReturnType<typeof transferLiveMinimapWorkerRequest>,
+    ): QueuedTask<RenderDataWorkerThread, LiveMinimapWorkerResult> {
+        return this.pool.queue((w) => w.renderLiveEditorMinimap(payload));
     }
 
     queueLoadTexture(

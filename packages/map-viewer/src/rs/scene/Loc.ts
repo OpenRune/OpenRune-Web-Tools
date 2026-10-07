@@ -9,7 +9,7 @@ export class Loc implements SceneLoc {
         public level: number,
         readonly x: number,
         readonly y: number,
-        readonly height: number,
+        public height: number,
         public entity: Entity,
         readonly rotation: number,
         readonly startX: number,

@@ -10,6 +10,61 @@ import { WallDecoration } from "./WallDecoration";
 import { Entity } from "./entity/Entity";
 import { EntityTag, EntityType, getEntityTypeFromTag } from "./entity/EntityTag";
 
+export function loadTileRenderFlagsTextureData(scene: Scene): Uint8Array {
+    return packTileRenderFlagsTextureData(
+        scene.tileRenderFlags,
+        scene.sizeX,
+        scene.sizeY,
+        scene.levels,
+    );
+}
+
+export function packTileRenderFlagsTextureData(
+    tileRenderFlags: Uint8Array[][],
+    sizeX: number,
+    sizeY: number,
+    levels: number = Scene.MAX_LEVELS,
+): Uint8Array {
+    const tileRenderFlagsTextureData = new Uint8Array(levels * sizeX * sizeY);
+
+    let dataIndex = 0;
+    for (let level = 0; level < levels; level++) {
+        for (let y = 0; y < sizeY; y++) {
+            for (let x = 0; x < sizeX; x++) {
+                tileRenderFlagsTextureData[dataIndex++] = tileRenderFlags[level][x][y];
+            }
+        }
+    }
+
+    return tileRenderFlagsTextureData;
+}
+
+export function loadHeightMapTextureData(scene: Scene): Float32Array {
+    const heightMapTextureData = new Float32Array(Scene.MAX_LEVELS * scene.sizeX * scene.sizeY);
+
+    let dataIndex = 0;
+    for (let level = 0; level < scene.levels; level++) {
+        for (let y = 0; y < scene.sizeY; y++) {
+            for (let x = 0; x < scene.sizeX; x++) {
+                heightMapTextureData[dataIndex++] = (-scene.tileHeights[level][x][y] / 8) | 0;
+            }
+        }
+    }
+
+    return heightMapTextureData;
+}
+
+export function applyHeightMapTextureData(scene: Scene, heightMapTextureData: Float32Array) {
+    let dataIndex = 0;
+    for (let level = 0; level < scene.levels; level++) {
+        for (let y = 0; y < scene.sizeY; y++) {
+            for (let x = 0; x < scene.sizeX; x++) {
+                scene.tileHeights[level][x][y] = (-heightMapTextureData[dataIndex++] * 8) | 0;
+            }
+        }
+    }
+}
+
 export class Scene {
     static readonly MAX_LEVELS = 4;
     static readonly MAP_SQUARE_SIZE = 64;
@@ -32,6 +87,9 @@ export class Scene {
 
     // Terrain light
     tileLightOcclusions: Uint8Array[][];
+    tileLights: Int32Array[][];
+
+    tileBlendedColors: Int32Array[][];
 
     constructor(
         readonly levels: number,
@@ -49,6 +107,8 @@ export class Scene {
         this.tileRotations = new Array(levels);
 
         this.tileLightOcclusions = new Array(levels);
+        this.tileLights = new Array(levels);
+        this.tileBlendedColors = new Array(levels);
         for (let l = 0; l < levels; l++) {
             this.tiles[l] = new Array(this.sizeX);
             this.collisionMaps[l] = new CollisionMap(this.sizeX, this.sizeY);
@@ -409,13 +469,39 @@ export class Scene {
             }
         }
 
+        this.tileLights[level] = lights;
+
         return lights;
     }
 
-    newTileModel(level: number, tileX: number, tileY: number, tileModel: SceneTileModel) {
+    setTileModel(
+        level: number,
+        tileX: number,
+        tileY: number,
+        tileModel: SceneTileModel | undefined,
+    ) {
         this.ensureTileExists(level, level, tileX, tileY);
 
         this.tiles[level][tileX][tileY].tileModel = tileModel;
+    }
+
+    newTileModel(level: number, tileX: number, tileY: number, tileModel: SceneTileModel) {
+        this.setTileModel(level, tileX, tileY, tileModel);
+    }
+
+    getMinHeight(level: number, tileX: number, tileY: number): number {
+        if (level === 0) {
+            return 0;
+        }
+        return this.tileHeights[level - 1][tileX][tileY];
+    }
+
+    setHeight(level: number, tileX: number, tileY: number, newHeight: number): void {
+        const height = this.tileHeights[level][tileX][tileY];
+        const deltaHeight = newHeight - height;
+        for (let i = level; i < this.levels; i++) {
+            this.tileHeights[i][tileX][tileY] += deltaHeight;
+        }
     }
 
     getTileMinLevel(level: number, tileX: number, tileY: number): number {

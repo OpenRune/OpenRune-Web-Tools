@@ -2980,6 +2980,18 @@ dir-glob@^3.0.1:
   dependencies:
     path-type "^4.0.0"
 
+dockview-core@^5.2.0:
+  version "5.2.0"
+  resolved "https://registry.npmjs.org/dockview-core/-/dockview-core-5.2.0.tgz"
+  integrity sha512-Gib8yhK2Ng7w47ASvbUZ7GdhBYbeXEflbIDxf/vobdQBMrN/QXmPaouSsSSkEx5YH0N8ap8GYljfvqjug7h5Fg==
+
+dockview@^5.2.0:
+  version "5.2.0"
+  resolved "https://registry.npmjs.org/dockview/-/dockview-5.2.0.tgz"
+  integrity sha512-Eh+SWt+AydcyeVmYkwP+Yxax0XpYSQfXsc4Rad9k+6QEddkSCn4hcjsdxp9lLsw/CaMy39jHawbDVxPMC4kvTg==
+  dependencies:
+    dockview-core "^5.2.0"
+
 doctrine@^2.1.0:
   version "2.1.0"
   resolved "https://registry.npmjs.org/doctrine/-/doctrine-2.1.0.tgz"
